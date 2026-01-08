@@ -1,233 +1,196 @@
-# ==========================================================
-# REMOTE POWERSHELL PROFILE (GitHub-hosted)
-# VMware / VCF PowerCLI–focused
-# ==========================================================
-
-# --------------------------
-# Profile Metadata
-# --------------------------
-$ProfileMetadata = @{
-    Name        = "Joel PowerShell Profile"
-    Version     = "2.0.2"
-    Branch      = "main"
-    Commit      = "vmware-load-fix"
-    LastUpdated = "2026-01-08"
-}
-
-# --------------------------
-# Profile Load Timing
-# --------------------------
-$script:ProfileLoadStart = Get-Date
-
-# --------------------------
-# Session State
-# --------------------------
-if (-not $global:SessionStartTime) { $global:SessionStartTime = Get-Date }
-
-$global:ModuleLoadChoice = $null
-$global:FastModeEnabled  = $false
-
-# --------------------------
-# VMware Modules (authoritative list)
-# --------------------------
-$VmwareModules = @(
-    "VCF.PowerCLI",
-    "VMware.PowerCLI"
-)
-
-# ==========================================================
-# Utilities
-# ==========================================================
-function Get-TimeIcon {
-    $h = (Get-Date).Hour
-    if ($h -lt 6) { "🌙" } elseif ($h -lt 12) { "☀️" } elseif ($h -lt 18) { "🌤️" } else { "🌆" }
-}
-
-function Get-SessionUptime {
-    "{0}m" -f [math]::Floor(((Get-Date) - $global:SessionStartTime).TotalMinutes)
-}
-
-function Get-ModuleVersionSafe {
-    param([Parameter(Mandatory)][string]$Name)
-
-    $m = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
-    if ($m) { return $m.Version.ToString() }
-    return "not found"
-}
-
-# ==========================================================
-# Ensure-Module (install if missing, then import with real error output)
-# ==========================================================
+# Ensure a module is installed, updated if needed, and imported
 function Ensure-Module {
-    param([Parameter(Mandatory)][string]$Name)
+    param (
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$Repository = "PSGallery",
+        [switch]$ForceInstall
+    )
 
-    $available = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+    $installed = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+    $online = Find-Module -Name $Name -Repository $Repository -ErrorAction SilentlyContinue
 
-    if (-not $available) {
-        Write-Host "📦 [$Name] Not found. Installing..." -ForegroundColor Yellow
+    if (-not $installed) {
         try {
-            Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            Write-Host "📦 Installing module: $Name" -ForegroundColor Yellow
+            Install-Module -Name $Name -Repository $Repository -Scope CurrentUser -Force:$ForceInstall -AllowClobber -ErrorAction Stop -Confirm:$False
+        } catch {
+            Write-Host "❌ Failed to install module: $Name" -ForegroundColor Red
+            Write-Host $_.Exception.Message
         }
-        catch {
-            Write-Host "❌ [$Name] Install failed: $($_.Exception.Message)" -ForegroundColor Red
-            return
-        }
-
-        $available = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
-        if (-not $available) {
-            Write-Host "❌ [$Name] Still not found after install." -ForegroundColor Red
-            return
+    } elseif ($online.Version -gt $installed.Version) {
+        try {
+            Write-Host "🔄 Updating $Name from $($installed.Version) → $($online.Version)" -ForegroundColor Yellow
+            Update-Module -Name $Name -Force:$ForceInstall -ErrorAction Stop -Confirm:$False
+        } catch {
+            Write-Host "❌ Failed to update module: $Name" -ForegroundColor Red
+            Write-Host $_.Exception.Message
         }
     }
 
-    Write-Host "⏳ Loading [$Name] (available: $($available.Version))..." -ForegroundColor Cyan
+<#	if ($Name -eq "VMware.PowerCLI") {
+        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    }
+#>
+
+	if ($Name -eq "VCF.PowerCLI") {
+        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    }
 
     try {
-        # Import and get the actual module object imported
-        $imported = Import-Module -Name $Name -Force -PassThru -ErrorAction Stop
-
-        # Some modules return multiple objects; take first
-        $imp = $imported | Select-Object -First 1
-        $impVer = if ($imp -and $imp.Version) { $imp.Version.ToString() } else { $available.Version.ToString() }
-
-        Write-Host "✅ [$Name] Loaded (imported: $impVer)" -ForegroundColor Green
-
-        # Apply PowerCLI preferences only after a successful import
-        if ($Name -eq "VMware.PowerCLI") {
-            try {
-                Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-                Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-                Write-Host "🔧 [VMware.PowerCLI] Preferences applied (CEIP off, invalid certs ignored)" -ForegroundColor DarkGray
-            }
-            catch {
-                # Don’t fail the session if preferences can't be applied
-                Write-Host "⚠ [VMware.PowerCLI] Loaded, but could not apply preferences: $($_.Exception.Message)" -ForegroundColor DarkYellow
-            }
-        }
-    }
-    catch {
-        Write-Host "❌ [$Name] Import failed: $($_.Exception.Message)" -ForegroundColor Red
-
-        # Extra hint for common cause: PS edition compatibility
-        if ($_.Exception.Message -match "not supported" -or $_.Exception.Message -match "edition") {
-            Write-Host "ℹ Hint: This can happen if the module isn't compatible with your PowerShell edition/version." -ForegroundColor DarkGray
-        }
+        Import-Module $Name -ErrorAction SilentlyContinue
+        Write-Host "✅ Module '$Name' loaded successfully." -ForegroundColor Green
+    } catch {
+        Write-Host "⚠️ Failed to import $Name." -ForegroundColor DarkYellow
     }
 }
 
-# ==========================================================
-# Banner
-# ==========================================================
-function Show-ProfileVersionBanner {
-    if ($global:FastModeEnabled) { return }
-
-    $isProd = $ProfileMetadata.Branch -in @("main","prod")
-    $envLabel = if ($isProd) { "PROD" } else { "DEV" }
-    $envColor = if ($isProd) { "Green" } else { "Yellow" }
-    $ms = [math]::Round(((Get-Date) - $script:ProfileLoadStart).TotalMilliseconds)
-
-    Write-Host ""
-    Write-Host "==========================================" -ForegroundColor DarkGray
-    Write-Host " PowerShell Profile v$($ProfileMetadata.Version)" -ForegroundColor Cyan
-    Write-Host " Environment : $envLabel ($($ProfileMetadata.Branch))" -ForegroundColor $envColor
-    Write-Host " Commit      : $($ProfileMetadata.Commit)" -ForegroundColor Gray
-    Write-Host " Updated     : $($ProfileMetadata.LastUpdated)" -ForegroundColor Gray
-    Write-Host " Load Time   : ${ms}ms" -ForegroundColor Gray
-    Write-Host "==========================================" -ForegroundColor DarkGray
+# Store session start time when profile is loaded
+if (-not $global:SessionStartTime) {
+    $global:SessionStartTime = Get-Date
 }
 
-# ==========================================================
-# Welcome Message
-# ==========================================================
+function Get-BatteryStatus {
+    $battery = Get-CimInstance Win32_Battery
+    if ($battery) {
+        return "$($battery.EstimatedChargeRemaining)% 🔋"
+    }
+    return ""
+}
+
+function Get-CPULoad {
+    $cpu = Get-Counter '\Processor(_Total)\% Processor Time'
+    $usage = [math]::Round($cpu.CounterSamples[0].CookedValue, 1)
+    return "$usage% CPU 🔥"
+}
+
+function Get-TimeIcon {
+    $hour = (Get-Date).Hour
+    switch ($hour) {
+        { $_ -lt 6 } { return "🌙" }
+        { $_ -lt 12 } { return "☀️" }
+        { $_ -lt 18 } { return "🌤️" }
+        default { return "🌆" }
+    }
+}
+
+function Get-RandomQuote {
+    $quotes = @(
+		"Dream big. Start now."
+		"You’ve got this."
+		"Be relentless."
+		"Make it happen."
+		"Create your future."
+		"Progress, not perfection."
+		"Stay hungry."
+		"Rise and grind."
+		"Own your power."
+		"Push. Persist. Prevail."
+    )
+    return $quotes | Get-Random
+}
+
+function Get-SessionUptime() {
+    $elapsed = (Get-Date) - $global:SessionStartTime
+    return "{0}m" -f [math]::Floor($elapsed.TotalMinutes)
+}
+
+function Get-TimezoneAbbr {
+    # Map known timezone names to abbreviations (expand as needed)
+    $tzMap = @{
+        "Pacific Standard Time" = "PST"
+        "Pacific Daylight Time" = "PDT"
+        "Mountain Standard Time" = "MST"
+        "Mountain Daylight Time" = "MDT"
+        "Central Standard Time" = "CST"
+        "Central Daylight Time" = "CDT"
+        "Eastern Standard Time" = "EST"
+        "Eastern Daylight Time" = "EDT"
+    }
+
+    $tz = [System.TimeZoneInfo]::Local
+    $isDST = $tz.IsDaylightSavingTime([DateTime]::Now)
+    $fullName = if ($isDST) { $tz.DaylightName } else { $tz.StandardName }
+
+    return $tzMap[$fullName] ?? $fullName
+}
+
 function Show-WelcomeMessage {
-    if ($global:FastModeEnabled) { return }
+    param (
+        [string[]]$ModulesToLoad = @()
+    )
 
-    Write-Host ""
-    Write-Host "==========================================" -ForegroundColor DarkGray
-    Write-Host "Good afternoon Joel $(Get-TimeIcon)" -ForegroundColor Green
-    Write-Host "Welcome to PowerShell! Create your future." -ForegroundColor Magenta
-    Write-Host "==========================================" -ForegroundColor DarkGray
-}
-
-# ==========================================================
-# Module Load Menu (VMware-only) - UPDATED ORDER
-# ==========================================================
-function Invoke-ModuleLoadPrompt {
-    if ($global:ModuleLoadChoice) { return }
-
-    Write-Host ""
-    Write-Host "📦 Module Load Options:" -ForegroundColor Cyan
-    Write-Host "1) Load ALL modules (VMware + VCF)"
-    Write-Host "2) Select modules"
-    Write-Host "3) FAST MODE"
-    Write-Host "4) Load NO modules"
-    Write-Host ""
-
-    $choice = Read-Host "Choose an option (1–4)"
-    $global:ModuleLoadChoice = $choice
-
-    switch ($choice) {
-
-        "1" {
-            foreach ($m in $VmwareModules) {
-                Ensure-Module $m
-            }
+    $hour = (Get-Date).Hour
+    $username = $env:USERNAME
+    $quote = Get-RandomQuote
+    $greeting = ""
+    $color = "White"
+	$name = "Joel" # Change this to your name
+    switch ($hour) {
+        { $_ -lt 12 } {
+            $greeting = "Good morning $name ☀️"
+            $color = "Yellow"
+            break
         }
-
-        "2" {
-            $vcfVer = Get-ModuleVersionSafe "VCF.PowerCLI"
-            $vmwVer = Get-ModuleVersionSafe "VMware.PowerCLI"
-
-            Write-Host ""
-            Write-Host "Select VMware modules to load:" -ForegroundColor Cyan
-            Write-Host "[1] VCF.PowerCLI     $vcfVer (heavy)" -ForegroundColor Yellow
-            Write-Host "[2] VMware.PowerCLI  $vmwVer (heavy)" -ForegroundColor Yellow
-            Write-Host "[3] Both"
-            Write-Host ""
-
-            switch (Read-Host "Choose (1–3)") {
-                "1" { Ensure-Module "VCF.PowerCLI" }
-                "2" { Ensure-Module "VMware.PowerCLI" }
-                "3" {
-                    Ensure-Module "VCF.PowerCLI"
-                    Ensure-Module "VMware.PowerCLI"
-                }
-                default {
-                    Write-Host "⏭ No modules selected." -ForegroundColor DarkGray
-                }
-            }
+        { $_ -lt 18 } {
+            $greeting = "Good afternoon $name 🌤️"
+            $color = "Green"
+            break
         }
-
-        "3" {
-            $global:FastModeEnabled = $true
-            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
-        }
-
-        "4" {
-            Write-Host "⏭ Skipping module load." -ForegroundColor DarkGray
-        }
-
         default {
-            Write-Host "⚠ Invalid selection." -ForegroundColor Red
+            $greeting = "Good evening $name 🌙"
+            $color = "Cyan"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "==========================================" -ForegroundColor DarkGray
+    Write-Host $greeting -ForegroundColor $color
+    Write-Host "Welcome to PowerShell! " -ForegroundColor Magenta -NoNewline
+    Write-Host "$quote" -ForegroundColor Cyan
+	Write-Host "==========================================" -ForegroundColor DarkGray
+
+    if ($ModulesToLoad.Count -gt 0) {
+        Write-Host "`n📦 Loading modules..." -ForegroundColor DarkCyan
+        foreach ($module in $ModulesToLoad) {
+            Write-Host "→ $module" -ForegroundColor DarkGray
         }
     }
 }
 
-# ==========================================================
-# Prompt
-# ==========================================================
 function prompt {
-    if ($global:FastModeEnabled) { return "❯ " }
-
     $now = Get-Date
-    Write-Host "`n[$($now.ToString("hh:mm:ss tt"))] ⏳ $(Get-SessionUptime)" -ForegroundColor DarkGray
-    Write-Host "❯ $((Get-Location).Path)>" -NoNewline -ForegroundColor Cyan
+    $time = $now.ToString("hh:mm:ss tt")
+    $date = $now.ToString("MM/dd/yyyy")
+    $tz = Get-TimezoneAbbr
+    $uptime = Get-SessionUptime
+    $battery = Get-BatteryStatus
+    $cpu = Get-CPULoad
+    $icon = Get-TimeIcon
+    $user = $env:USERNAME
+    $cwd = (Get-Location).Path
+    $base = Split-Path $cwd -Parent
+    $folder = Split-Path $cwd -Leaf
+
+    # Greeting and system info
+    Write-Host "`n$icon $date 📅 | [$time] ⏰ | PowerShell Console Uptime: $uptime ⏳" -ForegroundColor Green
+
+    # Prompt line with highlighted current folder
+    $shortTime = $now.ToString("hh:mm:ss tt")
+	Write-Host "`n[$shortTime] " -NoNewline -ForegroundColor Red
+	Write-Host "❯ $base\" -NoNewline -ForegroundColor DarkGray
+    Write-Host "$folder>" -NoNewline -ForegroundColor Cyan
+
     return " "
 }
+# Define modules to ensure are installed & loaded
+#$RequiredModules = @("VMware.PowerCLI")  # Add any other modules you want, e.g. (, "Az", "posh-git")
+$RequiredModules = @("VCF.PowerCLI")  # Add any other modules you want, e.g. (, "Az", "posh-git")
+# Show welcome message with module list
+Show-WelcomeMessage -ModulesToLoad $RequiredModules
 
-# ==========================================================
-# Startup Order
-# ==========================================================
-Show-ProfileVersionBanner
-Show-WelcomeMessage
-Invoke-ModuleLoadPrompt
+# Load all modules
+foreach ($mod in $RequiredModules) {
+    Ensure-Module -Name $mod
+}
