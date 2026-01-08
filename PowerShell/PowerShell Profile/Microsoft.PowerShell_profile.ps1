@@ -8,9 +8,9 @@
 # --------------------------
 $ProfileMetadata = @{
     Name        = "Joel PowerShell Profile"
-    Version     = "2.0.1"
+    Version     = "2.0.2"
     Branch      = "main"
-    Commit      = "vmware-selector-fix"
+    Commit      = "vmware-load-fix"
     LastUpdated = "2026-01-08"
 }
 
@@ -36,32 +36,6 @@ $VmwareModules = @(
 )
 
 # ==========================================================
-# Ensure-Module
-# ==========================================================
-function Ensure-Module {
-    param ([Parameter(Mandatory)][string]$Name)
-
-    if ($Name -eq "VMware.PowerCLI") {
-        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-        Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    }
-
-    if (-not (Get-Module -ListAvailable -Name $Name)) {
-        Write-Host "📦 Installing $Name..." -ForegroundColor Yellow
-        Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction SilentlyContinue
-    }
-
-    Import-Module $Name -ErrorAction SilentlyContinue
-
-    if (Get-Module -Name $Name) {
-        Write-Host "✅ $Name loaded" -ForegroundColor Green
-    }
-    else {
-        Write-Host "⚠ Failed to load $Name" -ForegroundColor DarkYellow
-    }
-}
-
-# ==========================================================
 # Utilities
 # ==========================================================
 function Get-TimeIcon {
@@ -74,10 +48,71 @@ function Get-SessionUptime {
 }
 
 function Get-ModuleVersionSafe {
-    param ([string]$Name)
-    (Get-Module -ListAvailable -Name $Name |
-        Sort-Object Version -Descending |
-        Select-Object -First 1).Version
+    param([Parameter(Mandatory)][string]$Name)
+
+    $m = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+    if ($m) { return $m.Version.ToString() }
+    return "not found"
+}
+
+# ==========================================================
+# Ensure-Module (install if missing, then import with real error output)
+# ==========================================================
+function Ensure-Module {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $available = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+
+    if (-not $available) {
+        Write-Host "📦 [$Name] Not found. Installing..." -ForegroundColor Yellow
+        try {
+            Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+        }
+        catch {
+            Write-Host "❌ [$Name] Install failed: $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
+
+        $available = Get-Module -ListAvailable -Name $Name | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $available) {
+            Write-Host "❌ [$Name] Still not found after install." -ForegroundColor Red
+            return
+        }
+    }
+
+    Write-Host "⏳ Loading [$Name] (available: $($available.Version))..." -ForegroundColor Cyan
+
+    try {
+        # Import and get the actual module object imported
+        $imported = Import-Module -Name $Name -Force -PassThru -ErrorAction Stop
+
+        # Some modules return multiple objects; take first
+        $imp = $imported | Select-Object -First 1
+        $impVer = if ($imp -and $imp.Version) { $imp.Version.ToString() } else { $available.Version.ToString() }
+
+        Write-Host "✅ [$Name] Loaded (imported: $impVer)" -ForegroundColor Green
+
+        # Apply PowerCLI preferences only after a successful import
+        if ($Name -eq "VMware.PowerCLI") {
+            try {
+                Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+                Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "🔧 [VMware.PowerCLI] Preferences applied (CEIP off, invalid certs ignored)" -ForegroundColor DarkGray
+            }
+            catch {
+                # Don’t fail the session if preferences can't be applied
+                Write-Host "⚠ [VMware.PowerCLI] Loaded, but could not apply preferences: $($_.Exception.Message)" -ForegroundColor DarkYellow
+            }
+        }
+    }
+    catch {
+        Write-Host "❌ [$Name] Import failed: $($_.Exception.Message)" -ForegroundColor Red
+
+        # Extra hint for common cause: PS edition compatibility
+        if ($_.Exception.Message -match "not supported" -or $_.Exception.Message -match "edition") {
+            Write-Host "ℹ Hint: This can happen if the module isn't compatible with your PowerShell edition/version." -ForegroundColor DarkGray
+        }
+    }
 }
 
 # ==========================================================
@@ -115,7 +150,7 @@ function Show-WelcomeMessage {
 }
 
 # ==========================================================
-# Module Load Menu (VMware-only)
+# Module Load Menu (VMware-only) - UPDATED ORDER
 # ==========================================================
 function Invoke-ModuleLoadPrompt {
     if ($global:ModuleLoadChoice) { return }
@@ -124,8 +159,8 @@ function Invoke-ModuleLoadPrompt {
     Write-Host "📦 Module Load Options:" -ForegroundColor Cyan
     Write-Host "1) Load ALL modules (VMware + VCF)"
     Write-Host "2) Select modules"
-    Write-Host "3) Load NO modules"
-    Write-Host "4) FAST MODE"
+    Write-Host "3) FAST MODE"
+    Write-Host "4) Load NO modules"
     Write-Host ""
 
     $choice = Read-Host "Choose an option (1–4)"
@@ -146,7 +181,7 @@ function Invoke-ModuleLoadPrompt {
             Write-Host ""
             Write-Host "Select VMware modules to load:" -ForegroundColor Cyan
             Write-Host "[1] VCF.PowerCLI     $vcfVer (heavy)" -ForegroundColor Yellow
-            Write-Host "[2] VMware.PowerCLI $vmwVer (heavy)" -ForegroundColor Yellow
+            Write-Host "[2] VMware.PowerCLI  $vmwVer (heavy)" -ForegroundColor Yellow
             Write-Host "[3] Both"
             Write-Host ""
 
@@ -164,12 +199,12 @@ function Invoke-ModuleLoadPrompt {
         }
 
         "3" {
-            Write-Host "⏭ Skipping module load." -ForegroundColor DarkGray
+            $global:FastModeEnabled = $true
+            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
         }
 
         "4" {
-            $global:FastModeEnabled = $true
-            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
+            Write-Host "⏭ Skipping module load." -ForegroundColor DarkGray
         }
 
         default {
