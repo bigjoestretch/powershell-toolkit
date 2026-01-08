@@ -1,19 +1,17 @@
 # ==========================================================
 # REMOTE POWERSHELL PROFILE (GitHub-hosted)
-# - Version banner + branch coloring + load timing
-# - Fast Mode
-# - Module menu restricted to VMware.PowerCLI and VCF.PowerCLI only
+# VMware / VCF PowerCLI–focused
 # ==========================================================
 
 # --------------------------
-# Profile Metadata (MANUAL)
+# Profile Metadata
 # --------------------------
 $ProfileMetadata = @{
     Name        = "Joel PowerShell Profile"
-    Version     = "2.0.0"
-    Branch      = "main"           # main/prod = PROD, anything else = DEV
-    Commit      = "vmware-only"
-    LastUpdated = "2026-01-08"     # YYYY-MM-DD
+    Version     = "2.0.1"
+    Branch      = "main"
+    Commit      = "vmware-selector-fix"
+    LastUpdated = "2026-01-08"
 }
 
 # --------------------------
@@ -30,29 +28,25 @@ $global:ModuleLoadChoice = $null
 $global:FastModeEnabled  = $false
 
 # --------------------------
-# VMware modules we care about
+# VMware Modules (authoritative list)
 # --------------------------
-$VmwareCoreModules = @(
-    "VMware.PowerCLI",
-    "VCF.PowerCLI"
+$VmwareModules = @(
+    "VCF.PowerCLI",
+    "VMware.PowerCLI"
 )
 
 # ==========================================================
-# Ensure-Module (install if missing, then import)
+# Ensure-Module
 # ==========================================================
 function Ensure-Module {
-    param (
-        [Parameter(Mandatory)][string]$Name
-    )
+    param ([Parameter(Mandatory)][string]$Name)
 
-    # VMware.PowerCLI tuning (safe no-op if cmdlets absent)
     if ($Name -eq "VMware.PowerCLI") {
         Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
         Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
     }
 
-    $exists = Get-Module -ListAvailable -Name $Name | Select-Object -First 1
-    if (-not $exists) {
+    if (-not (Get-Module -ListAvailable -Name $Name)) {
         Write-Host "📦 Installing $Name..." -ForegroundColor Yellow
         Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction SilentlyContinue
     }
@@ -79,13 +73,20 @@ function Get-SessionUptime {
     "{0}m" -f [math]::Floor(((Get-Date) - $global:SessionStartTime).TotalMinutes)
 }
 
+function Get-ModuleVersionSafe {
+    param ([string]$Name)
+    (Get-Module -ListAvailable -Name $Name |
+        Sort-Object Version -Descending |
+        Select-Object -First 1).Version
+}
+
 # ==========================================================
-# Banner (branch-colored + timing)
+# Banner
 # ==========================================================
 function Show-ProfileVersionBanner {
     if ($global:FastModeEnabled) { return }
 
-    $isProd = $ProfileMetadata.Branch -in @("main", "prod")
+    $isProd = $ProfileMetadata.Branch -in @("main","prod")
     $envLabel = if ($isProd) { "PROD" } else { "DEV" }
     $envColor = if ($isProd) { "Green" } else { "Yellow" }
     $ms = [math]::Round(((Get-Date) - $script:ProfileLoadStart).TotalMilliseconds)
@@ -121,8 +122,8 @@ function Invoke-ModuleLoadPrompt {
 
     Write-Host ""
     Write-Host "📦 Module Load Options:" -ForegroundColor Cyan
-    Write-Host "1) Load ALL (VMware.PowerCLI + VCF.PowerCLI)"
-    Write-Host "2) Select (choose one or both)"
+    Write-Host "1) Load ALL modules (VMware + VCF)"
+    Write-Host "2) Select modules"
     Write-Host "3) Load NO modules"
     Write-Host "4) FAST MODE"
     Write-Host ""
@@ -133,30 +134,32 @@ function Invoke-ModuleLoadPrompt {
     switch ($choice) {
 
         "1" {
-            foreach ($m in $VmwareCoreModules) {
-                Ensure-Module -Name $m
+            foreach ($m in $VmwareModules) {
+                Ensure-Module $m
             }
         }
 
         "2" {
+            $vcfVer = Get-ModuleVersionSafe "VCF.PowerCLI"
+            $vmwVer = Get-ModuleVersionSafe "VMware.PowerCLI"
+
             Write-Host ""
-            Write-Host "Select modules to load:" -ForegroundColor Cyan
-            Write-Host "1) VMware.PowerCLI"
-            Write-Host "2) VCF.PowerCLI"
-            Write-Host "3) Both"
-            Write-Host "4) Cancel"
+            Write-Host "Select VMware modules to load:" -ForegroundColor Cyan
+            Write-Host "[1] VCF.PowerCLI     $vcfVer (heavy)" -ForegroundColor Yellow
+            Write-Host "[2] VMware.PowerCLI $vmwVer (heavy)" -ForegroundColor Yellow
+            Write-Host "[3] Both"
             Write-Host ""
 
-            $sel = Read-Host "Choose (1–4)"
-
-            switch ($sel) {
-                "1" { Ensure-Module -Name "VMware.PowerCLI" }
-                "2" { Ensure-Module -Name "VCF.PowerCLI" }
+            switch (Read-Host "Choose (1–3)") {
+                "1" { Ensure-Module "VCF.PowerCLI" }
+                "2" { Ensure-Module "VMware.PowerCLI" }
                 "3" {
-                    Ensure-Module -Name "VMware.PowerCLI"
-                    Ensure-Module -Name "VCF.PowerCLI"
+                    Ensure-Module "VCF.PowerCLI"
+                    Ensure-Module "VMware.PowerCLI"
                 }
-                default { Write-Host "⏭ No modules selected." -ForegroundColor DarkGray }
+                default {
+                    Write-Host "⏭ No modules selected." -ForegroundColor DarkGray
+                }
             }
         }
 
@@ -182,10 +185,8 @@ function prompt {
     if ($global:FastModeEnabled) { return "❯ " }
 
     $now = Get-Date
-    $path = (Get-Location).Path
-
     Write-Host "`n[$($now.ToString("hh:mm:ss tt"))] ⏳ $(Get-SessionUptime)" -ForegroundColor DarkGray
-    Write-Host "❯ $path>" -NoNewline -ForegroundColor Cyan
+    Write-Host "❯ $((Get-Location).Path)>" -NoNewline -ForegroundColor Cyan
     return " "
 }
 
