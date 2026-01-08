@@ -1,12 +1,12 @@
 # ==========================================================
-# Profile Metadata (MANUAL – update when you commit)
+# Profile Metadata (MANUAL)
 # ==========================================================
 $ProfileMetadata = @{
     Name        = "Joel PowerShell Profile"
-    Version     = "2.0.0"
+    Version     = "2.0.2"
     Branch      = "main"          # main = PROD, anything else = DEV
-    Commit      = "1757c88"       # short SHA from GitHub
-    LastUpdated = "2026-01-07"    # YYYY-MM-DD
+    Commit      = "profile-fix"
+    LastUpdated = "2026-01-07"
 }
 
 # ==========================================================
@@ -26,7 +26,7 @@ $global:FastModeEnabled  = $false
 $global:OhMyPoshEnabled  = $false
 
 # ==========================================================
-# Heavy Modules (highlighted in selector)
+# Heavy Modules (highlighted)
 # ==========================================================
 $HeavyModules = @(
     "VMware.PowerCLI",
@@ -37,7 +37,7 @@ $HeavyModules = @(
 )
 
 # ==========================================================
-# Ensure-Module (install + import)
+# Ensure-Module
 # ==========================================================
 function Ensure-Module {
     param (
@@ -49,11 +49,7 @@ function Ensure-Module {
         Set-PowerCLIConfiguration -Scope User -InvalidCertificateAction Ignore -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
     }
 
-    $installed = Get-Module -ListAvailable -Name $Name |
-        Sort-Object Version -Descending |
-        Select-Object -First 1
-
-    if (-not $installed) {
+    if (-not (Get-Module -ListAvailable -Name $Name)) {
         Write-Host "📦 Installing $Name..." -ForegroundColor Yellow
         Install-Module -Name $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction SilentlyContinue
     }
@@ -66,12 +62,11 @@ function Ensure-Module {
 # Utilities
 # ==========================================================
 function Get-TimeIcon {
-    switch ((Get-Date).Hour) {
-        { $_ -lt 6 }  { "🌙" }
-        { $_ -lt 12 } { "☀️" }
-        { $_ -lt 18 } { "🌤️" }
-        default       { "🌆" }
-    }
+    $hour = (Get-Date).Hour
+    if ($hour -lt 6) { "🌙" }
+    elseif ($hour -lt 12) { "☀️" }
+    elseif ($hour -lt 18) { "🌤️" }
+    else { "🌆" }
 }
 
 function Get-SessionUptime {
@@ -79,7 +74,7 @@ function Get-SessionUptime {
 }
 
 # ==========================================================
-# Installed Modules (deduped + sorted)
+# Installed Modules (safe enumeration)
 # ==========================================================
 function Get-InstalledModulesClean {
     Get-Module -ListAvailable |
@@ -91,19 +86,22 @@ function Get-InstalledModulesClean {
 }
 
 # ==========================================================
-# Profile Version Banner (branch-aware + timing)
+# Profile Version Banner (branch-aware)
 # ==========================================================
 function Show-ProfileVersionBanner {
 
     if ($global:FastModeEnabled) { return }
 
-    switch ($ProfileMetadata.Branch.ToLower()) {
-        "main" { $envLabel = "PROD"; $envColor = "Green" }
-        "prod" { $envLabel = "PROD"; $envColor = "Green" }
-        default { $envLabel = "DEV"; $envColor = "Yellow" }
+    if ($ProfileMetadata.Branch -eq "main") {
+        $envLabel = "PROD"
+        $envColor = "Green"
+    }
+    else {
+        $envLabel = "DEV"
+        $envColor = "Yellow"
     }
 
-    $loadTimeMs = [math]::Round(((Get-Date) - $script:ProfileLoadStart).TotalMilliseconds)
+    $loadMs = [math]::Round(((Get-Date) - $script:ProfileLoadStart).TotalMilliseconds)
 
     Write-Host ""
     Write-Host "==========================================" -ForegroundColor DarkGray
@@ -111,7 +109,7 @@ function Show-ProfileVersionBanner {
     Write-Host " Environment : $envLabel ($($ProfileMetadata.Branch))" -ForegroundColor $envColor
     Write-Host " Commit      : $($ProfileMetadata.Commit)" -ForegroundColor Gray
     Write-Host " Updated     : $($ProfileMetadata.LastUpdated)" -ForegroundColor Gray
-    Write-Host " Load Time   : ${loadTimeMs}ms" -ForegroundColor Gray
+    Write-Host " Load Time   : ${loadMs}ms" -ForegroundColor Gray
     Write-Host "==========================================" -ForegroundColor DarkGray
 }
 
@@ -122,11 +120,9 @@ function Show-WelcomeMessage {
 
     if ($global:FastModeEnabled) { return }
 
-    $icon = Get-TimeIcon
-
     Write-Host ""
     Write-Host "==========================================" -ForegroundColor DarkGray
-    Write-Host "Good afternoon Joel $icon" -ForegroundColor Green
+    Write-Host "Good afternoon Joel $(Get-TimeIcon)" -ForegroundColor Green
     Write-Host "Welcome to PowerShell! Create your future." -ForegroundColor Magenta
     Write-Host "==========================================" -ForegroundColor DarkGray
 }
@@ -147,13 +143,11 @@ function Enable-OhMyPosh {
     }
 
     oh-my-posh init pwsh | Invoke-Expression
-    $global:OhMyPoshEnabled = $true
-
     Write-Host "✨ oh-my-posh enabled" -ForegroundColor Green
 }
 
 # ==========================================================
-# Module Load Menu (session-remembered)
+# Module Load Menu (SYNTAX SAFE)
 # ==========================================================
 function Invoke-ModuleLoadPrompt {
 
@@ -164,7 +158,7 @@ function Invoke-ModuleLoadPrompt {
     Write-Host "1) Load ALL modules"
     Write-Host "2) Select modules"
     Write-Host "3) Load NO modules"
-    Write-Host "4) FAST MODE (skip everything)" -ForegroundColor Yellow
+    Write-Host "4) FAST MODE"
     Write-Host "5) Enable oh-my-posh"
     Write-Host ""
 
@@ -174,39 +168,37 @@ function Invoke-ModuleLoadPrompt {
     switch ($choice) {
 
         "1" {
-            Get-InstalledModulesClean | ForEach-Object {
-                Ensure-Module -Name $_.Name
+            foreach ($m in Get-InstalledModulesClean) {
+                Ensure-Module -Name $m.Name
             }
         }
 
         "2" {
             $mods = Get-InstalledModulesClean
+            $indexMap = @{}
+            $i = 1
 
-            Write-Host "`n📦 Installed PowerShell Modules:`n" -ForegroundColor Cyan
-
-            for ($i = 0; $i -lt $mods.Count; $i++) {
-                $m   = $mods[$i]
-                $idx = "[{0,2}]" -f ($i + 1)
+            Write-Host ""
+            foreach ($m in $mods) {
+                $indexMap[$i] = $m.Name
 
                 if ($HeavyModules -contains $m.Name) {
-                    Write-Host "$idx $($m.Name)" -NoNewline -ForegroundColor Yellow
-                    Write-Host "  $($m.Version)  (heavy)" -ForegroundColor DarkYellow
+                    Write-Host "[$i] $($m.Name)  $($m.Version)  (heavy)" -ForegroundColor Yellow
                 }
                 else {
-                    Write-Host "$idx $($m.Name)  $($m.Version)" -ForegroundColor Gray
+                    Write-Host "[$i] $($m.Name)  $($m.Version)" -ForegroundColor Gray
                 }
+
+                $i++
             }
 
             Write-Host ""
-            $selection = Read-Host "Enter module numbers (comma-separated)"
+            $selection = Read-Host "Enter numbers (comma-separated)"
 
-            $indexes = $selection -split "," | ForEach-Object {
-                ($_ -as [int]) - 1
-            }
-
-            foreach ($i in $indexes) {
-                if ($i -ge 0 -and $i -lt $mods.Count) {
-                    Ensure-Module -Name $mods[$i].Name
+            foreach ($s in $selection -split ",") {
+                $n = $s -as [int]
+                if ($indexMap.ContainsKey($n)) {
+                    Ensure-Module -Name $indexMap[$n]
                 }
             }
         }
@@ -216,8 +208,8 @@ function Invoke-ModuleLoadPrompt {
         }
 
         "4" {
-            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
             $global:FastModeEnabled = $true
+            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
         }
 
         "5" {
@@ -229,3 +221,31 @@ function Invoke-ModuleLoadPrompt {
         }
     }
 }
+
+# ==========================================================
+# Prompt
+# ==========================================================
+function prompt {
+
+    if ($global:FastModeEnabled) {
+        return "❯ "
+    }
+
+    $now  = Get-Date
+    $path = (Get-Location).Path
+    $base = Split-Path $path -Parent
+    $leaf = Split-Path $path -Leaf
+
+    Write-Host "`n[$($now.ToString("hh:mm:ss tt"))] ⏳ $(Get-SessionUptime)" -ForegroundColor DarkGray
+    Write-Host "❯ $base\" -NoNewline -ForegroundColor DarkGray
+    Write-Host "$leaf>" -NoNewline -ForegroundColor Cyan
+
+    return " "
+}
+
+# ==========================================================
+# Startup Order
+# ==========================================================
+Show-ProfileVersionBanner
+Show-WelcomeMessage
+Invoke-ModuleLoadPrompt
