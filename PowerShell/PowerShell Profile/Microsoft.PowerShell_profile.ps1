@@ -5,7 +5,7 @@ $ProfileMetadata = @{
     Name        = "Joel PowerShell Profile"
     Version     = "2.0.0"
     Branch      = "main"          # main = PROD, anything else = DEV
-    Commit      = "a3f92c1"       # short SHA from GitHub
+    Commit      = "1757c88"       # short SHA from GitHub
     LastUpdated = "2026-01-07"    # YYYY-MM-DD
 }
 
@@ -185,3 +185,4 @@ function Invoke-ModuleLoadPrompt {
             Write-Host "`n📦 Installed PowerShell Modules:`n" -ForegroundColor Cyan
 
             for ($i = 0; $i -lt $m
+
