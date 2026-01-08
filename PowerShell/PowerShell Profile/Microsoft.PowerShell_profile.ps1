@@ -184,5 +184,48 @@ function Invoke-ModuleLoadPrompt {
 
             Write-Host "`n📦 Installed PowerShell Modules:`n" -ForegroundColor Cyan
 
-            for ($i = 0; $i -lt $m
+            for ($i = 0; $i -lt $mods.Count; $i++) {
+                $m   = $mods[$i]
+                $idx = "[{0,2}]" -f ($i + 1)
 
+                if ($HeavyModules -contains $m.Name) {
+                    Write-Host "$idx $($m.Name)" -NoNewline -ForegroundColor Yellow
+                    Write-Host "  $($m.Version)  (heavy)" -ForegroundColor DarkYellow
+                }
+                else {
+                    Write-Host "$idx $($m.Name)  $($m.Version)" -ForegroundColor Gray
+                }
+            }
+
+            Write-Host ""
+            $selection = Read-Host "Enter module numbers (comma-separated)"
+
+            $indexes = $selection -split "," | ForEach-Object {
+                ($_ -as [int]) - 1
+            }
+
+            foreach ($i in $indexes) {
+                if ($i -ge 0 -and $i -lt $mods.Count) {
+                    Ensure-Module -Name $mods[$i].Name
+                }
+            }
+        }
+
+        "3" {
+            Write-Host "⏭ Skipping module load." -ForegroundColor DarkGray
+        }
+
+        "4" {
+            Write-Host "⚡ FAST MODE enabled for this session." -ForegroundColor Yellow
+            $global:FastModeEnabled = $true
+        }
+
+        "5" {
+            Enable-OhMyPosh
+        }
+
+        default {
+            Write-Host "⚠ Invalid selection. No modules loaded." -ForegroundColor Red
+        }
+    }
+}
